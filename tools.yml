@@ -1,0 +1,19 @@
+# tools.yml - Catalogo degli script disponibili per LaunchC39B
+# Ogni voce definisce: nome identificativo, path relativo, opzioni di default
+# script_opt è facoltativo: se non serve lasciare vuoto o omettere
+
+- script_name: Sgamatore
+  script_path: ..\Sgamatore\sgamatore.py
+  script_opt: --ecofin
+
+- script_name: Planning-Intruder
+  script_path: ..\Planning-Intruder\planning-intruder.py
+  script_opt:
+
+- script_name: EQA
+  script_path: ..\EQA\EQA.py
+  script_opt:
+
+- script_name: Workload-Analyzer
+  script_path: ..\Workload_Analyzer1\WKL_ANL.py
+  script_opt:
