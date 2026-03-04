@@ -12,6 +12,7 @@ from tkinter import filedialog, scrolledtext
 from datetime import datetime
 from pathlib import Path
 
+import re
 import yaml
 from rich.console import Console
 from rich.text import Text
@@ -52,6 +53,15 @@ LOG_COLORS = {
 
 LOG_BG = "#1e1e1e"
 LOG_FG = "#d4d4d4"
+
+# Regex per rimuovere sequenze di escape ANSI (es. \x1b[32m)
+# Usata per pulire l'output degli script figli prima di scriverlo nella GUI
+_ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[mGKHF]|\x1b\][^\x07]*\x07')
+
+
+def strip_ansi(text: str) -> str:
+    """Rimuove i codici ANSI di escape da una stringa."""
+    return _ANSI_ESCAPE.sub('', text)
 
 
 # ===========================================================================
@@ -137,6 +147,10 @@ class LauncherApp:
         self.script_vars: dict[str, tk.BooleanVar] = {}
 
         self._build_gui()
+        # Imposta dimensione iniziale dopo che i widget sono stati costruiti,
+        # così tkinter non la sovrascrive con il layout automatico
+        self.root.update_idletasks()
+        self.root.geometry("1100x700")
         self._log(f"LaunchC39B {VER_NAME} avviato.", "INFO")
         self._log(f"Caricati {len(self.tools)} script da tools.yml.", "INFO")
         if configs is None:
@@ -199,7 +213,7 @@ class LauncherApp:
         lb_frame = tk.LabelFrame(center, text="Configurazioni", padx=5, pady=5)
         lb_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
 
-        self.listbox = tk.Listbox(lb_frame, width=36, height=8, exportselection=False)
+        self.listbox = tk.Listbox(lb_frame, width=52, height=10, exportselection=False)
         self.listbox.pack(side=tk.LEFT, fill=tk.Y)
         scrollbar = tk.Scrollbar(lb_frame, orient=tk.VERTICAL, command=self.listbox.yview)
         scrollbar.pack(side=tk.LEFT, fill=tk.Y)
@@ -305,6 +319,39 @@ class LauncherApp:
             self.log_widget.config(state=tk.DISABLED)
 
         # Se chiamato da thread secondario usa after, altrimenti diretto
+        if threading.current_thread() is threading.main_thread():
+            _write()
+        else:
+            self.root.after(0, _write)
+
+    def _log_child(self, raw_line: str):
+        """
+        Gestisce una riga di output proveniente da uno script figlio.
+        Il testo viene pulito da eventuali codici ANSI residui e scritto
+        sia sulla console che nella GUI come testo plain.
+        Le righe contenenti \r (progress bar) vengono ignorate per evitare
+        righe duplicate nella GUI.
+        """
+        # Ignora righe di progress bar (contengono \r)
+        if "\r" in raw_line:
+            return
+
+        clean = strip_ansi(raw_line)
+        if not clean.strip():
+            return
+
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        gui_line = f"[{timestamp}] {'INFO':<8} {clean}\n"
+
+        # Console via Rich (plain, senza markup colore)
+        console.print(clean, style="white")
+
+        def _write():
+            self.log_widget.config(state=tk.NORMAL)
+            self.log_widget.insert(tk.END, gui_line, "INFO")
+            self.log_widget.see(tk.END)
+            self.log_widget.config(state=tk.DISABLED)
+
         if threading.current_thread() is threading.main_thread():
             _write()
         else:
@@ -528,9 +575,13 @@ class LauncherApp:
                         errors="replace"
                     )
 
-                    # Legge stdout riga per riga e lo riversa nel log
+                    # Legge stdout riga per riga e lo riversa nel log.
+                    # I codici ANSI vengono passati intatti alla console Rich
+                    # e rimossi prima di scrivere nella finestra tkinter.
+                    # Le righe contenenti \r (progress bar) vanno solo a console
+                    # per evitare una cascata di righe nella GUI.
                     for line in process.stdout:
-                        self._log(line.rstrip(), "INFO")
+                        self._log_child(line.rstrip())
 
                     process.wait()
 
