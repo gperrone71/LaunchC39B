@@ -16,25 +16,49 @@
 
 configurations:
 
-  # Pipeline completa: tutti gli script in sequenza.
-  # Sgamatore traduce il file e il suo output viene passato agli script successivi.
-  Pipeline completa:
-    use_transl_as_act: true
-    Sgamatore: true
-    Planning-Intruder: true
-    EQA: true
-    Workload-Analyzer: true
-
-  # Solo Sgamatore: utile per tradurre il file senza eseguire le analisi.
-  Solo Sgamatore:
+  # Solo Sgamatore: fa solo controllo scarichi
+  Sgamatore solo controllo scarichi:
     Sgamatore: true
     Planning-Intruder: false
     EQA: false
     Workload-Analyzer: false
+    
+  # Sgamatore e ECOFIN: utile per tradurre il file senza eseguire le analisi.
+  Sgamatore, ECOFIN:
+    Sgamatore: 
+        enabled: true
+        opt_override: --ecofin
+    Planning-Intruder: false
+    EQA: false
+    Workload-Analyzer: false
 
-  # Analisi senza Sgamatore: gli script lavorano direttamente su file_act originale.
-  Analisi su file esistente:
-    Sgamatore: false
+  # Sgamatore, ECOFIN e Planning-Intruder: utile per verifiche intermedie sulle pianificazioni
+  Sgamatore, ECOFIN e Planning-Intruder:
+    use_transl_as_act: true
+    Sgamatore: 
+        enabled: true
+        opt_override: --ecofin
+    Planning-Intruder: true
+    EQA: false
+    Workload-Analyzer: false
+
+  # Sgamatore, ECOFIN e Planning-Intruder: utile per verifiche intermedie sulle pianificazioni
+  Sgamatore, ECOFIN, Planning-Intruder, EQA:
+    use_transl_as_act: true
+    Sgamatore: 
+        enabled: true
+        opt_override: --ecofin
+    Planning-Intruder: true
+    EQA: true
+    Workload-Analyzer: false
+      
+  # Pipeline completa: tutti gli script in sequenza.
+  # Sgamatore traduce il file e il suo output viene passato agli script successivi.
+  Pipeline completa:
+    use_transl_as_act: true
+    Sgamatore: 
+        enabled: true
+        opt_override: --ecofin
     Planning-Intruder: true
     EQA: true
     Workload-Analyzer: true
@@ -49,3 +73,12 @@ configurations:
     Planning-Intruder: true
     EQA: true
     Workload-Analyzer: true
+    
+  # Analisi senza Sgamatore: gli script lavorano direttamente su file_act originale.
+  Analisi su file esistente:
+    Sgamatore: false
+    Planning-Intruder: true
+    EQA: true
+    Workload-Analyzer: true
+
+

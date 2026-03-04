@@ -4,7 +4,7 @@
 
 - script_name: Sgamatore
   script_path: ..\Sgamatore\sgamatore.py
-  script_opt: --ecofin
+  script_opt: 
 
 - script_name: Planning-Intruder
   script_path: ..\Planning-Intruder\planning-intruder.py

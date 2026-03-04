@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
+from rich.console import Console
+from rich.text import Text
 
 # ---------------------------------------------------------------------------
 # Versione release
@@ -26,13 +28,30 @@ VER_NAME = "1.0 - Ariel"
 SGAMATORE_NAME = "sgamatore"
 
 # ---------------------------------------------------------------------------
-# Colori per il log nella finestra GUI
+# Console Rich per output colorato su terminale
+# ---------------------------------------------------------------------------
+console = Console()
+
+# Stili Rich per ciascun livello di log
+RICH_STYLES = {
+    "INFO":    "white",
+    "WARNING": "bold yellow",
+    "ERROR":   "bold red",
+}
+
+# ---------------------------------------------------------------------------
+# Colori per il log nella finestra GUI (tkinter tag) - tema scuro
 # ---------------------------------------------------------------------------
 LOG_COLORS = {
-    "INFO":    "black",
-    "WARNING": "darkorange",
-    "ERROR":   "red",
+    "INFO":    "#d4d4d4",   # grigio chiaro
+    "WARNING": "#e5c07b",   # giallo ambra
+    "ERROR":   "#e06c75",   # rosso soft
+    "CMD":     "#61afef",   # blu - per le righe Comando:
+    "DONE":    "#98c379",   # verde - per completamento script
 }
+
+LOG_BG = "#1e1e1e"
+LOG_FG = "#d4d4d4"
 
 
 # ===========================================================================
@@ -142,7 +161,7 @@ class LauncherApp:
         row.pack(fill=tk.X, pady=2)
         tk.Label(row, text="File BUD:", width=12, anchor="w").pack(side=tk.LEFT)
         self.var_file_old = tk.StringVar()
-        tk.Entry(row, textvariable=self.var_file_old, width=60).pack(side=tk.LEFT, padx=4)
+        tk.Entry(row, textvariable=self.var_file_old, width=72).pack(side=tk.LEFT, padx=4)
         tk.Button(row, text="...", command=self._browse_file_old).pack(side=tk.LEFT)
 
         # --- Riga: File ACT (obbligatorio, dataset corrente) ---
@@ -151,7 +170,7 @@ class LauncherApp:
         tk.Label(row, text="File ACT:", width=12, anchor="w").pack(side=tk.LEFT)
         self.var_file_act = tk.StringVar()
         self.var_file_act.trace_add("write", self._on_file_act_changed)
-        tk.Entry(row, textvariable=self.var_file_act, width=60).pack(side=tk.LEFT, padx=4)
+        tk.Entry(row, textvariable=self.var_file_act, width=72).pack(side=tk.LEFT, padx=4)
         tk.Button(row, text="...", command=self._browse_file_act).pack(side=tk.LEFT)
 
         # --- Riga: Anno + Cartella output ---
@@ -180,7 +199,7 @@ class LauncherApp:
         lb_frame = tk.LabelFrame(center, text="Configurazioni", padx=5, pady=5)
         lb_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
 
-        self.listbox = tk.Listbox(lb_frame, width=28, height=6, exportselection=False)
+        self.listbox = tk.Listbox(lb_frame, width=36, height=8, exportselection=False)
         self.listbox.pack(side=tk.LEFT, fill=tk.Y)
         scrollbar = tk.Scrollbar(lb_frame, orient=tk.VERTICAL, command=self.listbox.yview)
         scrollbar.pack(side=tk.LEFT, fill=tk.Y)
@@ -219,17 +238,26 @@ class LauncherApp:
             command=self.root.destroy
         ).pack(side=tk.LEFT, padx=4)
 
+        # Checkbox: apri cartella di output al termine della pipeline
+        self.var_open_folder = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            btn_frame, text="Apri cartella al termine",
+            variable=self.var_open_folder
+        ).pack(side=tk.LEFT, padx=16)
+
         # --- Finestra di log ---
         log_frame = tk.LabelFrame(main, text="Log", padx=5, pady=5)
         log_frame.pack(fill=tk.BOTH, expand=True, pady=4)
 
         self.log_widget = scrolledtext.ScrolledText(
             log_frame, height=14, state=tk.DISABLED,
-            font=("Courier New", 9), wrap=tk.WORD
+            font=("Courier New", 9), wrap=tk.WORD,
+            background=LOG_BG, foreground=LOG_FG,
+            insertbackground=LOG_FG
         )
         self.log_widget.pack(fill=tk.BOTH, expand=True)
 
-        # Tag colori per i livelli di log
+        # Tag colori per i livelli di log (tema scuro)
         for level, color in LOG_COLORS.items():
             self.log_widget.tag_config(level, foreground=color)
 
@@ -239,19 +267,40 @@ class LauncherApp:
 
     def _log(self, message: str, level: str = "INFO"):
         """
-        Scrive una riga di log nella finestra GUI e su console.
+        Scrive una riga di log nella finestra GUI e su console (via Rich).
         Formato: [HH:MM:SS] LEVEL  messaggio
+
+        Nella GUI usa tag distinti per livello; rileva automaticamente le
+        righe "Comando:" (tag CMD) e i messaggi di completamento (tag DONE).
         """
         timestamp = datetime.now().strftime("%H:%M:%S")
         line = f"[{timestamp}] {level:<8} {message}\n"
 
-        # Console
-        print(line, end="")
+        # --- Console via Rich ---
+        style = RICH_STYLES.get(level, "white")
+        # Evidenzia timestamp in grigio, livello con lo stile del livello
+        rich_line = (
+            f"[dim][{timestamp}][/dim] "
+            f"[{style}]{level:<8}[/{style}] "
+            f"[{style}]{message}[/{style}]"
+        )
+        console.print(rich_line)
 
-        # GUI (deve essere aggiornata dal thread principale via after)
+        # --- GUI: determina il tag più appropriato ---
+        if level == "ERROR":
+            tag = "ERROR"
+        elif level == "WARNING":
+            tag = "WARNING"
+        elif message.startswith("  Comando:"):
+            tag = "CMD"
+        elif "completato" in message.lower():
+            tag = "DONE"
+        else:
+            tag = "INFO"
+
         def _write():
             self.log_widget.config(state=tk.NORMAL)
-            self.log_widget.insert(tk.END, line, level)
+            self.log_widget.insert(tk.END, line, tag)
             self.log_widget.see(tk.END)
             self.log_widget.config(state=tk.DISABLED)
 
@@ -332,6 +381,26 @@ class LauncherApp:
         return name, self.configs.get(name, {})
 
     # -----------------------------------------------------------------------
+    # Apertura cartella output
+    # -----------------------------------------------------------------------
+
+    def _open_output_folder(self, path: str):
+        """Apre la cartella di output nel file manager di sistema."""
+        import platform
+        import subprocess as sp
+        try:
+            folder = str(Path(path).resolve())
+            system = platform.system()
+            if system == "Windows":
+                sp.Popen(["explorer", folder])
+            elif system == "Darwin":
+                sp.Popen(["open", folder])
+            else:
+                sp.Popen(["xdg-open", folder])
+        except Exception as e:
+            self._log(f"Impossibile aprire la cartella: {e}", "WARNING")
+
+    # -----------------------------------------------------------------------
     # Avvio pipeline
     # -----------------------------------------------------------------------
 
@@ -359,6 +428,10 @@ class LauncherApp:
                     "ERROR"
                 )
                 return
+
+        # --- Warning se File BUD non specificato ---
+        if not file_old:
+            self._log("File BUD non specificato: --file_bud verrà omesso dalla chiamata agli script.", "WARNING")
 
         # --- Disabilita Start per tutta la durata ---
         self.btn_start.config(state=tk.DISABLED)
@@ -485,6 +558,10 @@ class LauncherApp:
             # Riabilita Start in ogni caso (successo o errore)
             self.root.after(0, lambda: self.btn_start.config(state=tk.NORMAL))
             self._log("Pipeline terminata.", "INFO")
+
+            # Apri cartella di output se l'opzione è attiva
+            if self.var_open_folder.get():
+                self._open_output_folder(output_dir)
 
 
 # ===========================================================================
