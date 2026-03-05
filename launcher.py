@@ -12,9 +12,14 @@ from tkinter import filedialog, scrolledtext
 from datetime import datetime
 from pathlib import Path
 
+import argparse
 import re
 import yaml
 from rich.console import Console
+
+# Forza UTF-8 su stdout per compatibilità con terminali Windows (es. DOS/cmd).
+# Va eseguito prima di qualsiasi output, incluso Rich.
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 from rich.text import Text
 
 # ---------------------------------------------------------------------------
@@ -53,6 +58,15 @@ LOG_COLORS = {
 
 LOG_BG = "#1e1e1e"
 LOG_FG = "#d4d4d4"
+
+# Colori indicatori di stato degli script
+INDICATOR_COLORS = {
+    "disabled":  "#888888",  # grigio  - script disabilitato
+    "waiting":   "#f0c040",  # giallo  - in attesa di esecuzione
+    "running":   "#4a9eff",  # blu     - in esecuzione
+    "done":      "#98c379",  # verde   - completato con successo
+    "error":     "#e06c75",  # rosso   - terminato con errore
+}
 
 # Regex per rimuovere sequenze di escape ANSI (es. \x1b[32m)
 # Usata per pulire l'output degli script figli prima di scriverlo nella GUI
@@ -123,14 +137,26 @@ def load_configs(config_path: Path, tools: list[dict]) -> dict | None:
         if config_body is None:
             continue
         for key in config_body:
-            # Le chiavi di pipeline-level (es. use_transl_as_act) non sono script
-            if key.lower() == "use_transl_as_act":
+            # Chiavi riservate a livello di pipeline: non sono nomi di script
+            if key.lower() in ("use_transl_as_act", "id"):
                 continue
             if key.lower() not in valid_names:
                 print(f"[ERROR] config.yml: script '{key}' non trovato in tools.yml.")
                 return None
 
     return configs
+
+
+def find_config_by_id(configs: dict, config_id: str) -> tuple[str | None, dict]:
+    """
+    Cerca una configurazione tramite il campo 'id' (case insensitive).
+    Restituisce (nome_configurazione, config_body) oppure (None, {}) se non trovata.
+    """
+    for name, body in configs.items():
+        if isinstance(body, dict):
+            if body.get("id", "").lower() == config_id.lower():
+                return name, body
+    return None, {}
 
 
 # ===========================================================================
@@ -145,6 +171,9 @@ class LauncherApp:
 
         # Stato checkbox per ogni script: BooleanVar indicizzato per script_name
         self.script_vars: dict[str, tk.BooleanVar] = {}
+
+        # Canvas indicatori di stato per ogni script (cerchio colorato)
+        self.script_indicators: dict[str, tk.Canvas] = {}
 
         self._build_gui()
         # Imposta dimensione iniziale dopo che i widget sono stati costruiti,
@@ -234,7 +263,15 @@ class LauncherApp:
             var = tk.BooleanVar(value=True)
             self.script_vars[name] = var
             f = tk.Frame(scripts_frame)
-            f.pack(anchor="w", pady=1)
+            f.pack(anchor="w", pady=2)
+            # Indicatore di stato: cerchio colorato 16x16
+            canvas = tk.Canvas(f, width=16, height=16,
+                               highlightthickness=0, bg=scripts_frame.cget("bg"))
+            canvas.pack(side=tk.LEFT, padx=(2, 4))
+            canvas.create_oval(2, 2, 14, 14,
+                               fill=INDICATOR_COLORS["waiting"],
+                               outline="", tags="indicator")
+            self.script_indicators[name] = canvas
             tk.Checkbutton(f, text=name, variable=var).pack(side=tk.LEFT)
 
         # --- Pulsanti Start / Quit ---
@@ -356,6 +393,25 @@ class LauncherApp:
             _write()
         else:
             self.root.after(0, _write)
+
+    def _set_indicator(self, script_name: str, state: str):
+        """
+        Aggiorna il colore dell'indicatore di stato di uno script.
+        Stati: 'disabled', 'waiting', 'running', 'done', 'error'
+        Può essere chiamato da thread secondari tramite root.after().
+        """
+        canvas = self.script_indicators.get(script_name)
+        if canvas is None:
+            return
+        color = INDICATOR_COLORS.get(state, INDICATOR_COLORS["waiting"])
+
+        def _update():
+            canvas.itemconfig("indicator", fill=color)
+
+        if threading.current_thread() is threading.main_thread():
+            _update()
+        else:
+            self.root.after(0, _update)
 
     # -----------------------------------------------------------------------
     # Browse helpers
@@ -511,6 +567,15 @@ class LauncherApp:
                 out_path.mkdir(parents=True)
                 self._log(f"Cartella di output creata: {out_path}", "INFO")
 
+            # Reset indicatori: grigio per disabilitati, giallo per abilitati
+            for entry in self.tools:
+                name = entry["script_name"]
+                var = self.script_vars.get(name)
+                if var and var.get():
+                    self._set_indicator(name, "waiting")
+                else:
+                    self._set_indicator(name, "disabled")
+
             # file_act corrente (può essere sostituito dopo Sgamatore)
             current_file_act = file_act
             sgamatore_done = False
@@ -561,6 +626,7 @@ class LauncherApp:
                 # Opzioni specifiche dello script
                 cmd += extra_opts
 
+                self._set_indicator(name, "running")
                 self._log(f"Avvio script '{name}'...", "INFO")
                 self._log(f"  Comando: {' '.join(cmd)}", "INFO")
 
@@ -589,12 +655,14 @@ class LauncherApp:
                         raise subprocess.CalledProcessError(process.returncode, cmd)
 
                     self._log(f"Script '{name}' completato (returncode=0).", "INFO")
+                    self._set_indicator(name, "done")
 
                     # Segna Sgamatore come completato per la logica use_transl
                     if name.lower() == SGAMATORE_NAME:
                         sgamatore_done = True
 
                 except subprocess.CalledProcessError as e:
+                    self._set_indicator(name, "error")
                     self._log(
                         f"Script '{name}' terminato con errore (returncode={e.returncode}). "
                         "Pipeline interrotta.",
@@ -619,29 +687,200 @@ class LauncherApp:
 # MAIN
 # ===========================================================================
 
+def _run_headless(
+    tools: list[dict],
+    script_vars: dict[str, bool],
+    config_body: dict,
+    file_act: str,
+    file_bud: str,
+    anno: str,
+    output_dir: str,
+    use_transl: bool,
+    base_dir: Path,
+):
+    """
+    Esegue la pipeline in modalità headless (nessuna GUI).
+    Output solo su console via Rich. Termina con sys.exit(1) in caso di errore.
+    """
+    # Crea cartella di output se non esiste
+    out_path = Path(output_dir)
+    if not out_path.exists():
+        out_path.mkdir(parents=True)
+        console.print(f"[dim][INFO][/dim] Cartella di output creata: {out_path}")
+
+    current_file_act = file_act
+    sgamatore_done = False
+
+    for entry in tools:
+        name = entry["script_name"]
+        enabled = script_vars.get(name, True)
+
+        if not enabled:
+            console.print(f"[dim][INFO]    Script '{name}' disabilitato, skip.[/dim]")
+            continue
+
+        # Sostituisce file_act con _transl dopo Sgamatore
+        if use_transl and sgamatore_done and name.lower() != SGAMATORE_NAME:
+            stem = Path(file_act).stem
+            transl_path = out_path / f"{stem}_transl.xlsx"
+            if transl_path.exists():
+                current_file_act = str(transl_path)
+                console.print(f"[dim][INFO][/dim] use_transl_as_act: file_act sostituito con {transl_path}")
+            else:
+                console.print(f"[bold yellow][WARNING] File _transl non trovato ({transl_path}). Uso file_act originale.[/bold yellow]")
+
+        # Determina opzioni
+        script_cfg = config_body.get(name)
+        if isinstance(script_cfg, dict) and "opt_override" in script_cfg:
+            extra_opts = script_cfg["opt_override"].split()
+        else:
+            raw_opt = entry.get("script_opt") or ""
+            extra_opts = raw_opt.split() if raw_opt else []
+
+        script_path = str(base_dir / entry["script_path"])
+        cmd = [sys.executable, script_path,
+               "--file_act", current_file_act,
+               "--year", anno,
+               "--out", output_dir]
+        if file_bud:
+            cmd += ["--file_bud", file_bud]
+        cmd += extra_opts
+
+        console.print(f"[dim][INFO][/dim] Avvio script '[bold]{name}[/bold]'...")
+        console.print(f"[dim][INFO]    Comando: {' '.join(cmd)}[/dim]")
+
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace"
+            )
+            for line in process.stdout:
+                clean = strip_ansi(line.rstrip())
+                if clean.strip() and "\r" not in line:
+                    console.print(clean, style="white")
+            process.wait()
+
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(process.returncode, cmd)
+
+            console.print(f"[bold green][INFO]    Script '{name}' completato (returncode=0).[/bold green]")
+            if name.lower() == SGAMATORE_NAME:
+                sgamatore_done = True
+
+        except subprocess.CalledProcessError as e:
+            console.print(f"[bold red][ERROR] Script '{name}' terminato con errore (returncode={e.returncode}). Pipeline interrotta.[/bold red]")
+            sys.exit(1)
+
+    console.print("[bold green][INFO] Pipeline terminata.[/bold green]")
+
+
 def main():
-    # Percorsi dei file di configurazione (stessa cartella dello script)
+    # -----------------------------------------------------------------------
+    # Parsing argomenti CLI
+    # -----------------------------------------------------------------------
+    parser = argparse.ArgumentParser(
+        description=f"LaunchC39B {VER_NAME} - Launcher per pipeline di script Python"
+    )
+    parser.add_argument("--file_act", help="File dataset corrente (obbligatorio in modalità CLI)")
+    parser.add_argument("--file_bud", help="File dataset precedente (facoltativo)")
+    parser.add_argument("--config",   help="ID della configurazione da eseguire (da config.yml)")
+    parser.add_argument("--out",      help="Cartella di output (default: Launch_YYMMDD_HHMM)")
+    parser.add_argument("--year",     help="Anno di processing (default: anno corrente)")
+    args = parser.parse_args()
+
+    # Modalità headless: attivata se --file_act e --config sono entrambi presenti
+    headless = bool(args.file_act and args.config)
+
+    # -----------------------------------------------------------------------
+    # Caricamento configurazione (comune a entrambe le modalità)
+    # -----------------------------------------------------------------------
     base_dir = Path(__file__).parent
     tools_path = base_dir / "tools.yml"
     config_path = base_dir / "config.yml"
 
-    # Carica tools.yml — esce con errore se non valido
     print(f"[INFO] Lettura tools.yml da {tools_path}")
     tools = load_tools(tools_path)
     print(f"[INFO] Caricati {len(tools)} script.")
 
-    # Verifica esistenza script (già fatta in load_tools, ma logghiamo i path)
     for entry in tools:
         script_path = base_dir / entry["script_path"]
         print(f"[INFO] Script verificato: {script_path}")
 
-    # Carica config.yml — None se non disponibile o con errori
     print(f"[INFO] Lettura config.yml da {config_path}")
     configs = load_configs(config_path, tools)
     if configs is None:
-        print("[WARNING] config.yml non disponibile o con errori: listbox vuota.")
+        print("[WARNING] config.yml non disponibile o con errori.")
 
-    # Costruisce e avvia la GUI
+    # -----------------------------------------------------------------------
+    # Modalità headless
+    # -----------------------------------------------------------------------
+    if headless:
+        if configs is None:
+            print("[ERROR] config.yml non disponibile: impossibile procedere in modalità headless.")
+            sys.exit(1)
+
+        config_name, config_body = find_config_by_id(configs, args.config)
+        if config_name is None:
+            print(f"[ERROR] Configurazione con id '{args.config}' non trovata in config.yml.")
+            sys.exit(1)
+
+        print(f"[INFO] Modalità headless — configurazione: '{config_name}'")
+
+        # Cartella output: usa --out se fornito, altrimenti genera nome automatico
+        output_dir = args.out or datetime.now().strftime("Launch_%y%m%d_%H%M")
+        anno = args.year or str(datetime.now().year)
+
+        # Costruisce script_vars da config_body (tutti abilitati secondo la config)
+        script_vars = {}
+        for entry in tools:
+            name = entry["script_name"]
+            script_cfg = config_body.get(name)
+            if script_cfg is None:
+                enabled = True  # non menzionato: abilitato per default
+            elif isinstance(script_cfg, bool):
+                enabled = script_cfg
+            elif isinstance(script_cfg, dict):
+                enabled = script_cfg.get("enabled", True)
+            else:
+                enabled = True
+            script_vars[name] = enabled
+
+        use_transl = config_body.get("use_transl_as_act", False)
+
+        # Validazione: use_transl_as_act richiede Sgamatore abilitato
+        if use_transl:
+            sgamatore_enabled = any(
+                enabled for name, enabled in script_vars.items()
+                if name.lower() == SGAMATORE_NAME
+            )
+            if not sgamatore_enabled:
+                print("[ERROR] use_transl_as_act è attivo ma Sgamatore è disabilitato.")
+                sys.exit(1)
+
+        if not args.file_bud:
+            print("[WARNING] File BUD non specificato: --file_bud verrà omesso.")
+
+        # Esegue la pipeline in modalità headless (stesso thread, output su console)
+        _run_headless(
+            tools=tools,
+            script_vars=script_vars,
+            config_body=config_body,
+            file_act=args.file_act,
+            file_bud=args.file_bud or "",
+            anno=anno,
+            output_dir=output_dir,
+            use_transl=use_transl,
+            base_dir=base_dir,
+        )
+        return
+
+    # -----------------------------------------------------------------------
+    # Modalità GUI (default)
+    # -----------------------------------------------------------------------
     root = tk.Tk()
     app = LauncherApp(root, tools, configs)
     root.mainloop()
