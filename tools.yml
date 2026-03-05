@@ -12,7 +12,7 @@
 
 - script_name: EQA
   script_path: ..\EQA\EQA.py
-  script_opt:
+  script_opt: --no_ctc
 
 - script_name: Workload-Analyzer
   script_path: ..\Workload_Analyzer1\WKL_ANL.py
