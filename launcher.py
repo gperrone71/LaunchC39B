@@ -25,7 +25,7 @@ from rich.text import Text
 # ---------------------------------------------------------------------------
 # Versione release
 # ---------------------------------------------------------------------------
-VER_NAME = "1.0 - Ariel"
+VER_NAME = "1.1 - Ariel (06/03/26)"
 
 # ---------------------------------------------------------------------------
 # Nome dello script Sgamatore (case insensitive nei confronti)
@@ -225,9 +225,9 @@ class LauncherApp:
         tk.Entry(row, textvariable=self.var_anno, width=6).pack(side=tk.LEFT, padx=4)
 
         tk.Label(row, text="  Output:", anchor="w").pack(side=tk.LEFT)
-        # Nome cartella di default: Launch_YYMMDD_HHMM al momento del lancio
-        default_out = datetime.now().strftime("Launch_%y%m%d_%H%M")
-        self.var_output = tk.StringVar(value=default_out)
+        # Il valore di default viene calcolato da _make_default_out()
+        # e aggiornato ogni volta che si seleziona una configurazione
+        self.var_output = tk.StringVar(value=self._make_default_out(None))
         tk.Entry(row, textvariable=self.var_output, width=36).pack(side=tk.LEFT, padx=4)
         tk.Button(row, text="...", command=self._browse_output).pack(side=tk.LEFT)
 
@@ -449,18 +449,33 @@ class LauncherApp:
         else:
             self.btn_start.config(state=tk.DISABLED)
 
+    def _make_default_out(self, config_id: str | None) -> str:
+        """
+        Genera il nome di default per la cartella di output nel formato
+        YYMMDD_HHMM_<id_config>. Se config_id è None o vuoto usa solo
+        YYMMDD_HHMM.
+        """
+        base = datetime.now().strftime("%y%m%d_%H%M")
+        if config_id:
+            return f"{base}_{config_id}"
+        return base
+
     def _on_config_selected(self, _event=None):
         """
-        Aggiorna i checkbox in base alla configurazione selezionata.
-        La selezione dalla listbox non sovrascrive modifiche manuali
-        successive — semplicemente imposta lo stato al momento della
-        selezione; l'utente può poi modificare liberamente i checkbox.
+        Aggiorna i checkbox e il percorso di output in base alla
+        configurazione selezionata. L'utente può modificare liberamente
+        il campo output dopo la selezione — il valore viene letto solo
+        al momento di premere Start.
         """
         selection = self.listbox.curselection()
         if not selection:
             return
         config_name = self.listbox.get(selection[0])
         config_body = self.configs.get(config_name, {})
+
+        # Aggiorna il percorso di output proposto con l'id della configurazione
+        config_id = config_body.get("id", "")
+        self.var_output.set(self._make_default_out(config_id))
 
         for entry in self.tools:
             name = entry["script_name"]
