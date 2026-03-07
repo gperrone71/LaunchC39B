@@ -25,7 +25,7 @@ from rich.text import Text
 # ---------------------------------------------------------------------------
 # Versione release
 # ---------------------------------------------------------------------------
-VER_NAME = "1.1 - Ariel (06/03/26)"
+VER_NAME = "1.3 - Ariel (07/03/26)"
 
 # ---------------------------------------------------------------------------
 # Nome dello script Sgamatore (case insensitive nei confronti)
@@ -595,6 +595,11 @@ class LauncherApp:
             current_file_act = file_act
             sgamatore_done = False
 
+            # Dizionario per raccogliere i tempi di esecuzione: {nome: secondi}
+            # Popolato durante il loop, usato nel finally per la tabella riepilogativa
+            timings: dict[str, float] = {}
+            pipeline_start = datetime.now()
+
             for entry in self.tools:
                 name = entry["script_name"]
                 var = self.script_vars.get(name)
@@ -646,6 +651,8 @@ class LauncherApp:
                 self._log(f"  Comando: {' '.join(cmd)}", "INFO")
 
                 try:
+                    t_start = datetime.now()
+
                     # Esegue lo script catturando stdout in tempo reale
                     process = subprocess.Popen(
                         cmd,
@@ -666,10 +673,13 @@ class LauncherApp:
 
                     process.wait()
 
+                    # Registra il tempo impiegato dallo script
+                    timings[name] = (datetime.now() - t_start).total_seconds()
+
                     if process.returncode != 0:
                         raise subprocess.CalledProcessError(process.returncode, cmd)
 
-                    self._log(f"Script '{name}' completato (returncode=0).", "INFO")
+                    self._log(f"Script '{name}' completato in {timings[name]:.1f}s.", "INFO")
                     self._set_indicator(name, "done")
 
                     # Segna Sgamatore come completato per la logica use_transl
@@ -691,6 +701,22 @@ class LauncherApp:
         finally:
             # Riabilita Start in ogni caso (successo o errore)
             self.root.after(0, lambda: self.btn_start.config(state=tk.NORMAL))
+
+            # --- Tabella riepilogativa tempi di esecuzione ---
+            # Mostrata solo se almeno uno script è stato eseguito
+            if timings:
+                total = (datetime.now() - pipeline_start).total_seconds()
+                col = max(len(n) for n in timings)  # larghezza colonna nome
+                sep = "-" * (col + 14)
+                self._log(sep, "INFO")
+                for script_name, secs in timings.items():
+                    mm, ss = divmod(int(secs), 60)
+                    self._log(f"  {script_name:<{col}}  {mm:02d}m {ss:02d}s  ({secs:.1f}s)", "INFO")
+                self._log(sep, "INFO")
+                mm_tot, ss_tot = divmod(int(total), 60)
+                self._log(f"  {'TOTALE':<{col}}  {mm_tot:02d}m {ss_tot:02d}s  ({total:.1f}s)", "INFO")
+                self._log(sep, "INFO")
+
             self._log("Pipeline terminata.", "INFO")
 
             # Apri cartella di output se l'opzione è attiva
