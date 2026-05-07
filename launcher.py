@@ -25,7 +25,7 @@ from rich.text import Text
 # ---------------------------------------------------------------------------
 # Versione release
 # ---------------------------------------------------------------------------
-VER_NAME = "1.3 - Ariel (07/03/26)"
+VER_NAME = "1.3.1 - Ariel (07/05/26)"
 
 # ---------------------------------------------------------------------------
 # Nome dello script Sgamatore (case insensitive nei confronti)
@@ -451,14 +451,16 @@ class LauncherApp:
 
     def _make_default_out(self, config_id: str | None) -> str:
         """
-        Genera il nome di default per la cartella di output nel formato
-        YYMMDD_HHMM_<id_config>. Se config_id è None o vuoto usa solo
-        YYMMDD_HHMM.
+        Genera il percorso di default per la cartella di output nel formato
+        YYMMDD_HHMM_<id_config>, ancorato alla cartella del launcher.
+        Usare un percorso assoluto evita che Python crei la cartella nella
+        working directory del processo (che può essere diversa dalla cartella
+        del launcher, tipicamente la home dello script padre).
         """
         base = datetime.now().strftime("%y%m%d_%H%M")
-        if config_id:
-            return f"{base}_{config_id}"
-        return base
+        folder_name = f"{base}_{config_id}" if config_id else base
+        # Tutte le cartelle di output vanno dentro <home_launcher>/output/
+        return str(Path(__file__).parent / "output" / folder_name)
 
     def _on_config_selected(self, _event=None):
         """

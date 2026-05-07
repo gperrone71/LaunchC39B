@@ -16,4 +16,4 @@
 
 - script_name: Workload-Analyzer
   script_path: ..\Workload_Analyzer1\WKL_ANL.py
-  script_opt:
+  script_opt: --planner
